@@ -25,7 +25,7 @@
          to_basic_consume/1,
          is_rpc/1,
          reply_to/1, reply_to/2,
-         content_type/1, content_type/2,
+         content_type/1,
          encoding/1,
          correlation_id/1 ]).
 
@@ -180,10 +180,6 @@ content_type(#amqp_msg{}=Content) ->
 
 content_type(Props) when is_list(Props) ->
   p(content_type, Props).
-
-%% Override the content type in a bus handle
-content_type(ContentType, #bus_handle{options=Os}=BusHandle) ->
-  BusHandle#bus_handle{options=lists:merge([{content_type,ContentType}],Os)}.
 
 encoding(Options) ->
   case proplists:get_value(encoding, Options) of

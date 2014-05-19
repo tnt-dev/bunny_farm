@@ -1,11 +1,11 @@
 %% Copyright 2011 Brian Lee Yung Rowe
-%% 
+%%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%   http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -91,19 +91,19 @@ bus(CachePid, {id,X}) ->
     not_found ->
       Conn = connect(X),
       qcache:put_conn(CachePid, Conn),
-      proplists:get_value(handle,Conn);
-    BH -> BH
+      proplists:get_value(pid, Conn);
+    BusPid -> BusPid
   end.
 
 %% Consume
--spec connect({exchange(), routing_key()}) -> [ {exchange(), boolean(), bus_handle()} ].
+-spec connect({exchange(), routing_key()}) -> [ {exchange(), boolean(), pid()} ].
 connect({<<Exchange/binary>>, <<Key/binary>>}) ->
   lager:debug("Opening ~p => ~p for consuming", [Exchange,Key]),
-  Handle = bunny_farm:open(Exchange,Key),
+  Pid = bunny_farm:open(Exchange,Key),
   Tag = tag(),
-  bunny_farm:consume(Handle, [{consumer_tag,Tag}]),
+  bunny_farm:consume(Pid, [{consumer_tag,Tag}]),
   %error_logger:info_msg("[gen_qfsm] Returning handle spec"),
-  [{id,Exchange}, {tag,Tag}, {handle,Handle}];
+  [{id,Exchange}, {tag,Tag}, {pid, Pid}];
 
 %% Consume
 connect({Exchange, Key}) ->
@@ -112,9 +112,9 @@ connect({Exchange, Key}) ->
 %% Publish
 connect(<<Exchange/binary>>) ->
   lager:debug("Opening ~p for publishing", [Exchange]),
-  Handle = bunny_farm:open(Exchange),
+  Pid = bunny_farm:open(Exchange),
   %error_logger:info_msg("[gen_qfsm] Returning handle spec"),
-  [{id,Exchange}, {tag,<<"">>}, {active,true}, {handle,Handle}];
+  [{id,Exchange}, {tag,<<"">>}, {active,true}, {handle, Pid}];
 
 %% Publish
 connect(Exchange) ->
@@ -123,18 +123,22 @@ connect(Exchange) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GEN_SERVER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 init([Module, Args, ConnSpecs]) ->
-  {ok,Pid} = qcache:start_link(),
+  {ok, CachePid} = qcache:start_link(),
   Handles = lists:map(fun(Conn) -> connect(Conn) end, ConnSpecs),
-  qcache:put_conns(Pid, Handles),
+  qcache:put_conns(CachePid, Handles),
   random:seed(now()),
-  case Module:init(Args, Pid) of
+  case Module:init(Args, CachePid) of
     {ok, StateName, StateData} ->
-      State = #gen_qstate{module=Module, module_state=StateData,
-                          fsm_state=StateName, cache_pid=Pid},
+      State = #gen_qstate{module=Module,
+                          module_state=StateData,
+                          fsm_state=StateName,
+                          cache_pid=CachePid},
       Response = {ok, static_state, State};
     {ok, StateName, StateData, Timeout} ->
-      State = #gen_qstate{module=Module, module_state=StateData,
-                          fsm_state=StateName, cache_pid=Pid},
+      State = #gen_qstate{module=Module,
+                          module_state=StateData,
+                          fsm_state=StateName,
+                          cache_pid=CachePid},
       Response = {ok, static_state, State, Timeout};
     {stop, Reason} ->
       Response = {stop, Reason}
@@ -242,16 +246,16 @@ handle_info({#'basic.deliver'{routing_key=Key}, Content},
   CachePid = State#gen_qstate.cache_pid,
   Payload = farm_tools:decode_payload(Content),
   case farm_tools:is_rpc(Content) of
-    true -> 
+    true ->
       {reply,Response, _, MState} =
         static_state({Key, Payload}, self(), State),
       {X,ReplyTo} = farm_tools:reply_to(Content),
-      BusHandle = bus(CachePid, {id,X}),
+      BusPid = bus(CachePid, {id,X}),
       lager:debug("Responding to ~p => ~p", [X,ReplyTo]),
       Props = [ {content_type, farm_tools:content_type(Content)},
                 {correlation_id, farm_tools:correlation_id(Content)} ],
       Msg = #message{payload=Response, props=Props},
-      bunny_farm:respond(Msg, ReplyTo, BusHandle),
+      bunny_farm:respond(Msg, ReplyTo, BusPid),
       %error_logger:info_msg("[gen_qfsm] Sent"),
       {next_state, static_state, MState};
     _ ->
@@ -273,4 +277,3 @@ terminate(Reason, static_state, State) ->
 
 code_change(_OldVersion, static_state, State, _Extra) ->
   {ok, static_state, State}.
-

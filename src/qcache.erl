@@ -28,7 +28,7 @@
          connections/1 ]).
 
 -record(state, {handles=[]}).
--record(qconn, {id, tag, active=false, handle}).
+-record(qconn, {id, tag, active=false, pid}).
 
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PUBLIC %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
@@ -72,13 +72,13 @@ to_qconn(PropList) when is_list(PropList) ->
 bus({tag,Tag}, State) ->
   case lists:keyfind(Tag,3,State#state.handles) of
     false -> not_found;
-    #qconn{}=QConn -> QConn#qconn.handle
+    #qconn{}=QConn -> QConn#qconn.pid
   end;
 
 bus({id,Exchange}, State) ->
   case lists:keyfind(Exchange,2,State#state.handles) of
     false -> not_found;
-    #qconn{}=QConn -> QConn#qconn.handle
+    #qconn{}=QConn -> QConn#qconn.pid
   end.
 
 

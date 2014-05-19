@@ -1,11 +1,11 @@
 %% Copyright 2011 Brian Lee Yung Rowe
-%% 
+%%
 %% Licensed under the Apache License, Version 2.0 (the "License");
 %% you may not use this file except in compliance with the License.
 %% You may obtain a copy of the License at
-%% 
+%%
 %%   http://www.apache.org/licenses/LICENSE-2.0
-%% 
+%%
 %% Unless required by applicable law or agreed to in writing, software
 %% distributed under the License is distributed on an "AS IS" BASIS,
 %% WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -61,29 +61,29 @@ bus(CachePid, {id,X}) ->
       Conn = connect(X),
       qcache:put_conn(CachePid, Conn),
       proplists:get_value(handle,Conn);
-    BH -> BH
+    BusPid -> BusPid
   end.
 
 %% Publish with options
 %-spec connect({maybe_binary(), maybe_binary()}) -> [tuple()].
 connect({<<X/binary>>, Options}) when is_list(Options) ->
   lager:debug("Opening ~p for publishing with options ~p", [X,Options]),
-  Handle = bunny_farm:open({X,Options}),
+  Pid = bunny_farm:open({X,Options}),
   %error_logger:info_msg("[gen_qserver] Returning handle spec"),
-  [{id,X}, {tag,<<"">>}, {active,true}, {handle,Handle}];
+  [{id,X}, {tag,<<"">>}, {active,true}, {pid,Pid}];
 
 %% Consume with maybe options
 connect({MaybeX, MaybeK}) ->
   lager:debug("Opening ~p => ~p for consuming", [MaybeX,MaybeK]),
-  Handle = bunny_farm:open(MaybeX,MaybeK),
+  Pid = bunny_farm:open(MaybeX,MaybeK),
   Tag = tag(),
-  bunny_farm:consume(Handle, [{consumer_tag,Tag}]),
+  bunny_farm:consume(Pid, [{consumer_tag,Tag}]),
   Exchange = case MaybeX of
     {Exch,_Os} -> Exch;
     Exch -> Exch
   end,
   %error_logger:info_msg("[gen_qserver] Returning handle spec"),
-  [{id,Exchange}, {tag,Tag}, {handle,Handle}];
+  [{id,Exchange}, {tag,Tag}, {pid,Pid}];
 
 %% Publish with no options
 connect(<<X/binary>>) -> connect({X,[]}).
@@ -116,16 +116,20 @@ response({stop, Reason, Reply, ModState}, #gen_qstate{}=State) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GEN_SERVER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 init([Module, Args, ConnSpecs]) ->
-  {ok,Pid} = qcache:start_link(),
+  {ok, CachePid} = qcache:start_link(),
   Handles = lists:map(fun(Conn) -> connect(Conn) end, ConnSpecs),
-  qcache:put_conns(Pid, Handles),
+  qcache:put_conns(CachePid, Handles),
   random:seed(now()),
-  case Module:init(Args, Pid) of
+  case Module:init(Args, CachePid) of
     {ok, ModuleState} ->
-      State = #gen_qstate{module=Module, module_state=ModuleState, cache_pid=Pid},
+      State = #gen_qstate{module=Module,
+                          module_state=ModuleState,
+                          cache_pid=CachePid},
       Response = {ok, State};
     {ok, ModuleState, Timeout} ->
-      State = #gen_qstate{module=Module, module_state=ModuleState, cache_pid=Pid},
+      State = #gen_qstate{module=Module,
+                          module_state=ModuleState,
+                          cache_pid=CachePid},
       Response = {ok, State, Timeout};
     {stop, Reason} ->
       Response = {stop, Reason}
@@ -159,20 +163,20 @@ handle_info({#'basic.deliver'{routing_key=Key}, Content}, State) ->
   %lager:debug("Message:~n  ~p", [Content]),
   Payload = farm_tools:decode_payload(Content),
   case farm_tools:is_rpc(Content) of
-    true -> 
+    true ->
       ResponseTuple = handle_call({Key, Payload}, self(), State),
       case ResponseTuple of
         {noreply,NewState} -> ok;
         % TODO: Clean up the embedded cases
         {reply,Response,NewState} ->
           {X,ReplyTo} = farm_tools:reply_to(Content),
-          BusHandle = bus(CachePid, {id,X}),
+          BusPid = bus(CachePid, {id,X}),
           lager:debug("Responding to ~p => ~p", [X,ReplyTo]),
           lager:debug("Response = ~p", [Response]),
           Props = [ {content_type, farm_tools:content_type(Content)},
                     {correlation_id, farm_tools:correlation_id(Content)} ],
           Msg = #message{payload=Response, props=Props},
-          bunny_farm:respond(Msg, ReplyTo, BusHandle)
+          bunny_farm:respond(Msg, ReplyTo, BusPid)
       end,
       {noreply, NewState};
     _ ->
@@ -205,4 +209,3 @@ terminate(Reason, State) ->
 
 code_change(_OldVersion, State, _Extra) ->
   {ok, State}.
-
