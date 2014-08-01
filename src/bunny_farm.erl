@@ -172,16 +172,23 @@ handle_info(reconnect, #state{spec=Spec, consumes=Consumes}=State) ->
           {noreply, State}
   end;
 handle_info({'DOWN', ConnectionRef, process, Connection, Reason},
-            #state{connection=Connection,
-                   connection_ref=ConnectionRef}=State) ->
-    lager:error("AMQP connection error: ~p", [Reason]),
+            #state{exchange=Exchange,
+                   options=Options,
+                   connection=Connection,
+                   connection_ref=ConnectionRef,
+                   channel=Channel}=State) ->
+    lager:error("AMQP connection error (~p ~p ~p ~p): ~p",
+                [Connection, Channel, Exchange, Options, Reason]),
     erlang:send_after(?RECONNECT_TIMEOUT, self(), reconnect),
     {noreply, State#state{connection=undefined, channel=undefined}};
 handle_info({'DOWN', ChannelRef, process, Channel, Reason},
-            #state{connection=Connection,
+            #state{exchange=Exchange,
+                   options=Options,
+                   connection=Connection,
                    channel=Channel,
                    channel_ref=ChannelRef}=State) ->
-    lager:error("AMQP channel error: ~p", [Reason]),
+    lager:error("AMQP channel error (~p ~p ~p ~p): ~p",
+                [Connection, Channel, Exchange, Options, Reason]),
     case is_pid(Connection) of
         true  -> amqp_connection:close(Connection);
         false -> ok
@@ -203,21 +210,45 @@ open_it(Options) ->
     ConnPid.
 
 connect(State) ->
-    case amqp_connection:start(network, amqp_params()) of
+    Params = amqp_params(),
+    lager:debug("Opening AMQP connection to ~p:~p",
+                [Params#amqp_params.host,
+                 Params#amqp_params.port]),
+    case amqp_connection:start(network, Params) of
         {ok, Connection} ->
+            lager:debug("AMQP connection ~p to ~p:~p established",
+                        [Connection,
+                         Params#amqp_params.host,
+                         Params#amqp_params.port]),
             case amqp_connection:open_channel(Connection) of
                 {ok, Channel} ->
+                    lager:debug("AMQP channel ~p on connection ~p"
+                                " to ~p:~p opened",
+                                [Channel,
+                                 Connection,
+                                 Params#amqp_params.host,
+                                 Params#amqp_params.port]),
                     ConnectionRef = erlang:monitor(process, Connection),
-                    ChannelRef = erlang:monitor(process, Channel),
+                    ChannelRef    = erlang:monitor(process, Channel),
                     {ok, State#state{connection=Connection,
                                      channel=Channel,
                                      connection_ref=ConnectionRef,
                                      channel_ref=ChannelRef}};
-                {error, _}=Error1 ->
+                {error, Reason}=Error1 ->
+                    lager:error("AMQP channel on connection ~p to ~p:~p"
+                                " could not be open: ~p",
+                                [Connection,
+                                 Params#amqp_params.host,
+                                 Params#amqp_params.port,
+                                 Reason]),
                     amqp_connection:close(Connection),
                     Error1
             end;
-        {error, _}=Error2 ->
+        {error, Reason}=Error2 ->
+            lager:error("AMQP connection to ~p:~p could not be established: ~p",
+                        [Params#amqp_params.host,
+                         Params#amqp_params.port,
+                         Reason]),
             Error2
     end.
 
@@ -241,7 +272,8 @@ declare_exchange(<<"">>, _Options, _Channel) ->
 declare_exchange(Key, Options, Channel) ->
     AllOptions = lists:merge([{exchange, Key}], Options),
     ExchDeclare = farm_tools:to_exchange_declare(AllOptions),
-    lager:debug("Declaring exchange: ~p", [ExchDeclare]),
+    lager:debug("Declare AMQP exchange ~p on channel ~p",
+                [ExchDeclare, Channel]),
     #'exchange.declare_ok'{} = amqp_channel:call(Channel, ExchDeclare),
     ok.
 
@@ -256,6 +288,8 @@ declare_queue(Options, Channel) when is_list(Options) ->
 declare_queue(Key, Options, Channel) ->
     AllOptions = lists:merge([{queue,Key}], Options),
     QueueDeclare = farm_tools:to_queue_declare(AllOptions),
+    lager:debug("Declare AMQP queue ~p on channel ~p",
+                [QueueDeclare, Channel]),
     #'queue.declare_ok'{queue=Q} = amqp_channel:call(Channel, QueueDeclare),
     Q.
 
@@ -263,18 +297,20 @@ bind(_Q, _BindKey, <<"">>, _Channel) ->
     ok;
 bind(Q, BindKey, X, Channel) ->
     QueueBind = #'queue.bind'{exchange=X, queue=Q, routing_key=BindKey},
+    lager:debug("Bind AMQP queue ~p on channel ~p",
+                [QueueBind, Channel]),
     #'queue.bind_ok'{} = amqp_channel:call(Channel, QueueBind),
     ok.
 
 subscribe(Q, Options, Pid, Channel) ->
     BasicConsume = farm_tools:to_basic_consume([{queue, Q} | Options]),
-    lager:debug("Sending subscription request:~n  ~p", [BasicConsume]),
+    lager:debug("Sending AMQP subscription request ~p on channel ~p",
+                [BasicConsume, Channel]),
     amqp_channel:subscribe(Channel, BasicConsume, Pid).
 
 amqp_params() ->
     Keys = [amqp_username, amqp_password, amqp_virtual_host, amqp_heartbeat],
     {Host, Port} = get_server(),
-    lager:debug("Opening AMQP connection to ~p:~p", [Host, Port]),
     [Username, Password, VHost, Heartbeat] = lists:map(fun get_env/1, Keys),
     #amqp_params{username=Username,
                  password=Password,
