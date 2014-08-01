@@ -93,8 +93,8 @@ respond(Payload, RoutingKey, Pid) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GEN_SERVER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 init([Spec]) ->
-    {ok, State1} = connect(#state{spec=Spec}),
-    State2 = declare(Spec, State1),
+    {ok, State1} = connect(#state{}),
+    State2 = declare(State1#state{spec=Spec}),
     {ok, State2}.
 
 handle_call({consume, Options, Pid}, _From, #state{queue=Q,
@@ -161,10 +161,10 @@ handle_cast({close, ChannelTag}, #state{channel=Channel,
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info(reconnect, #state{spec=Spec, consumes=Consumes}=State) ->
+handle_info(reconnect, #state{consumes=Consumes}=State) ->
   case connect(State) of
       {ok, #state{channel=Channel}=NewState} ->
-          NewState2 = #state{queue=Q} = declare(Spec, NewState),
+          NewState2 = #state{queue=Q} = declare(NewState),
           [subscribe(Q, Options, Pid, Channel) || {Options, Pid} <- Consumes],
           {noreply, NewState2};
       {error, _} ->
@@ -252,11 +252,12 @@ connect(State) ->
             Error2
     end.
 
-declare({publish, MaybeTuple}, #state{channel=Channel}=State) ->
+
+declare(#state{spec={publish, MaybeTuple}, channel=Channel}=State) ->
     {X, XO} = resolve_options(exchange, MaybeTuple),
     declare_exchange(X, XO, Channel),
     State#state{exchange=X, options=XO};
-declare({consume, {MaybeX, MaybeK}}, #state{channel=Channel}=State) ->
+declare(#state{spec={consume, {MaybeX, MaybeK}}, channel=Channel}=State) ->
     {X, XO} = resolve_options(exchange, MaybeX),
     {K, KO} = resolve_options(queue, MaybeK),
     declare_exchange(X, XO, Channel),
