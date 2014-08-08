@@ -94,8 +94,10 @@ respond(Payload, RoutingKey, Pid) ->
 
 init([Spec]) ->
     {ok, State1} = connect(#state{}),
-    State2 = declare(State1#state{spec=Spec}),
-    {ok, State2}.
+    case declare(State1#state{spec=Spec}) of
+        {ok, State2}    -> {ok, State2};
+        {error, Reason} -> {stop, Reason}
+    end.
 
 handle_call({consume, Options, Pid}, _From, #state{queue=Q,
                                                    channel=Channel,
@@ -162,15 +164,21 @@ handle_cast(_Msg, State) ->
     {noreply, State}.
 
 handle_info(reconnect, #state{consumes=Consumes}=State) ->
-  case connect(State) of
-      {ok, #state{channel=Channel}=NewState} ->
-          NewState2 = #state{queue=Q} = declare(NewState),
-          [subscribe(Q, Options, Pid, Channel) || {Options, Pid} <- Consumes],
-          {noreply, NewState2};
-      {error, _} ->
-          erlang:send_after(?RECONNECT_TIMEOUT, self(), reconnect),
-          {noreply, State}
-  end;
+    case connect(State) of
+        {ok, #state{channel=Channel}=NewState} ->
+            case declare(NewState) of
+                {ok, #state{queue=Q}=NewState2} ->
+                    [subscribe(Q, Options, Pid, Channel) || {Options, Pid} <- Consumes],
+                    {noreply, NewState2};
+                {error, _} ->
+                    close_connection(NewState),
+                    erlang:send_after(?RECONNECT_TIMEOUT, self(), reconnect),
+                    {noreply, State}
+            end;
+        {error, _} ->
+            erlang:send_after(?RECONNECT_TIMEOUT, self(), reconnect),
+            {noreply, State}
+    end;
 handle_info({'DOWN', ConnectionRef, process, Connection, Reason},
             #state{exchange=Exchange,
                    options=Options,
@@ -252,21 +260,28 @@ connect(State) ->
             Error2
     end.
 
-
 declare(#state{spec={publish, MaybeTuple}, channel=Channel}=State) ->
     {X, XO} = resolve_options(exchange, MaybeTuple),
-    declare_exchange(X, XO, Channel),
-    State#state{exchange=X, options=XO};
+    try
+        declare_exchange(X, XO, Channel),
+        {ok, State#state{exchange=X, options=XO}}
+    catch
+        exit:Reason -> {error, Reason}
+    end;
 declare(#state{spec={consume, {MaybeX, MaybeK}}, channel=Channel}=State) ->
     {X, XO} = resolve_options(exchange, MaybeX),
     {K, KO} = resolve_options(queue, MaybeK),
-    declare_exchange(X, XO, Channel),
-    Q = case X of
-            <<"">> -> declare_queue(K, KO, Channel);
-            _      -> declare_queue(KO, Channel)
-        end,
-    bind(Q, K, X, Channel),
-    State#state{queue=Q, exchange=X, options=XO}.
+    try
+        declare_exchange(X, XO, Channel),
+        Q = case X of
+                <<"">> -> declare_queue(K, KO, Channel);
+                _      -> declare_queue(KO, Channel)
+            end,
+        bind(Q, K, X, Channel),
+        {ok, State#state{queue=Q, exchange=X, options=XO}}
+    catch
+        exit:Reason -> {error, Reason}
+    end.
 
 declare_exchange(<<"">>, _Options, _Channel) ->
     ok;
@@ -405,7 +420,7 @@ close_connection(#state{connection=Connection, channel=Channel}) ->
         false -> ok
     end,
     case is_pid(Connection) of
-      true  -> amqp_connection:close(Connection);
+        true  -> amqp_connection:close(Connection);
         false -> ok
     end,
     ok.
