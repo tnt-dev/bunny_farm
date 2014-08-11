@@ -197,10 +197,6 @@ handle_info({'DOWN', ChannelRef, process, Channel, Reason},
                    channel_ref=ChannelRef}=State) ->
     lager:error("AMQP channel error (~p ~p ~p ~p): ~p",
                 [Connection, Channel, Exchange, Options, Reason]),
-    case is_pid(Connection) of
-        true  -> amqp_connection:close(Connection);
-        false -> ok
-    end,
     erlang:send_after(?RECONNECT_TIMEOUT, self(), reconnect),
     {noreply, State#state{connection=undefined, channel=undefined}};
 handle_info(_Info, State) ->
