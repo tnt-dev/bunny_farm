@@ -93,9 +93,13 @@ respond(Payload, RoutingKey, Pid) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% GEN_SERVER %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 init([Spec]) ->
-    {ok, State1} = connect(#state{}),
-    case declare(State1#state{spec=Spec}) of
-        {ok, State2}    -> {ok, State2};
+    case connect(#state{}) of
+        {ok, State1} ->
+            try
+                declare(State1#state{spec=Spec})
+            catch
+                exit:Reason -> {stop, Reason}
+            end;
         {error, Reason} -> {stop, Reason}
     end.
 
@@ -166,11 +170,13 @@ handle_cast(_Msg, State) ->
 handle_info(reconnect, #state{consumes=Consumes}=State) ->
     case connect(State) of
         {ok, #state{channel=Channel}=NewState} ->
-            case declare(NewState) of
-                {ok, #state{queue=Q}=NewState2} ->
-                    [subscribe(Q, Options, Pid, Channel) || {Options, Pid} <- Consumes],
-                    {noreply, NewState2};
-                {error, _} ->
+            try
+                {ok, #state{queue=Q}=NewState2} = declare(NewState),
+                [subscribe(Q, Options, Pid, Channel)
+                 || {Options, Pid} <- Consumes],
+                {noreply, NewState2}
+            catch
+                _:_ ->
                     close_connection(NewState),
                     erlang:send_after(?RECONNECT_TIMEOUT, self(), reconnect),
                     {noreply, State}
@@ -258,26 +264,18 @@ connect(State) ->
 
 declare(#state{spec={publish, MaybeTuple}, channel=Channel}=State) ->
     {X, XO} = resolve_options(exchange, MaybeTuple),
-    try
-        declare_exchange(X, XO, Channel),
-        {ok, State#state{exchange=X, options=XO}}
-    catch
-        exit:Reason -> {error, Reason}
-    end;
+    declare_exchange(X, XO, Channel),
+    {ok, State#state{exchange=X, options=XO}};
 declare(#state{spec={consume, {MaybeX, MaybeK}}, channel=Channel}=State) ->
     {X, XO} = resolve_options(exchange, MaybeX),
     {K, KO} = resolve_options(queue, MaybeK),
-    try
-        declare_exchange(X, XO, Channel),
-        Q = case X of
-                <<"">> -> declare_queue(K, KO, Channel);
-                _      -> declare_queue(KO, Channel)
-            end,
-        bind(Q, K, X, Channel),
-        {ok, State#state{queue=Q, exchange=X, options=XO}}
-    catch
-        exit:Reason -> {error, Reason}
-    end.
+    declare_exchange(X, XO, Channel),
+    Q = case X of
+            <<"">> -> declare_queue(K, KO, Channel);
+            _      -> declare_queue(KO, Channel)
+        end,
+    bind(Q, K, X, Channel),
+    {ok, State#state{queue=Q, exchange=X, options=XO}}.
 
 declare_exchange(<<"">>, _Options, _Channel) ->
     ok;
@@ -318,7 +316,8 @@ subscribe(Q, Options, Pid, Channel) ->
     BasicConsume = farm_tools:to_basic_consume([{queue, Q} | Options]),
     lager:debug("Sending AMQP subscription request ~p on channel ~p",
                 [BasicConsume, Channel]),
-    amqp_channel:subscribe(Channel, BasicConsume, Pid).
+    #'basic.consume_ok'{} = amqp_channel:subscribe(Channel, BasicConsume, Pid),
+    ok.
 
 amqp_params() ->
     Keys = [amqp_username, amqp_password, amqp_virtual_host, amqp_heartbeat],
