@@ -222,22 +222,22 @@ open_it(Options) ->
 connect(State) ->
     Params = amqp_params(),
     lager:debug("Opening AMQP connection to ~p:~p",
-                [Params#amqp_params.host,
-                 Params#amqp_params.port]),
-    case amqp_connection:start(network, Params) of
+                [Params#amqp_params_network.host,
+                 Params#amqp_params_network.port]),
+    case amqp_connection:start(Params) of
         {ok, Connection} ->
             lager:debug("AMQP connection ~p to ~p:~p established",
                         [Connection,
-                         Params#amqp_params.host,
-                         Params#amqp_params.port]),
+                         Params#amqp_params_network.host,
+                         Params#amqp_params_network.port]),
             case amqp_connection:open_channel(Connection) of
                 {ok, Channel} ->
                     lager:debug("AMQP channel ~p on connection ~p"
                                 " to ~p:~p opened",
                                 [Channel,
                                  Connection,
-                                 Params#amqp_params.host,
-                                 Params#amqp_params.port]),
+                                 Params#amqp_params_network.host,
+                                 Params#amqp_params_network.port]),
                     ConnectionRef = erlang:monitor(process, Connection),
                     ChannelRef    = erlang:monitor(process, Channel),
                     {ok, State#state{connection=Connection,
@@ -248,16 +248,16 @@ connect(State) ->
                     lager:error("AMQP channel on connection ~p to ~p:~p"
                                 " could not be open: ~p",
                                 [Connection,
-                                 Params#amqp_params.host,
-                                 Params#amqp_params.port,
+                                 Params#amqp_params_network.host,
+                                 Params#amqp_params_network.port,
                                  Reason]),
                     amqp_connection:close(Connection),
                     Error1
             end;
         {error, Reason}=Error2 ->
             lager:error("AMQP connection to ~p:~p could not be established: ~p",
-                        [Params#amqp_params.host,
-                         Params#amqp_params.port,
+                        [Params#amqp_params_network.host,
+                         Params#amqp_params_network.port,
                          Reason]),
             Error2
     end.
@@ -323,12 +323,12 @@ amqp_params() ->
     Keys = [amqp_username, amqp_password, amqp_virtual_host, amqp_heartbeat],
     {Host, Port} = get_server(),
     [Username, Password, VHost, Heartbeat] = lists:map(fun get_env/1, Keys),
-    #amqp_params{username=Username,
-                 password=Password,
-                 virtual_host=VHost,
-                 host=Host,
-                 port=Port,
-                 heartbeat=Heartbeat}.
+    #amqp_params_network{username=Username,
+                         password=Password,
+                         virtual_host=VHost,
+                         host=Host,
+                         port=Port,
+                         heartbeat=Heartbeat}.
 
 default(Key) ->
     Defaults = [{amqp_username, <<"guest">>},
