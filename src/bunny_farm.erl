@@ -399,7 +399,9 @@ queue_options(X) ->
 resolve_options(exchange, MaybeTuple) ->
     Defaults = exchange_defaults(),
     case MaybeTuple of
-        {X,O} -> {X, lists:merge([lists:sort(O), exchange_options(X), Defaults])};
+        {X,O} -> {X, lists:merge([lists:sort(O),
+                                  exchange_options(X),
+                                  Defaults])};
         X     -> {X, lists:merge([exchange_options(X), Defaults])}
     end;
 resolve_options(queue, MaybeTuple) ->
@@ -417,5 +419,4 @@ close_connection(#state{connection=Connection, channel=Channel}) ->
     case is_pid(Connection) of
         true  -> amqp_connection:close(Connection);
         false -> ok
-    end,
-    ok.
+    end.
