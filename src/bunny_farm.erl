@@ -365,7 +365,7 @@ get_server() ->
         [] ->
             {get_env(amqp_host), get_env(amqp_port)};
         Servers ->
-            Idx = random:uniform(length(Servers)),
+            Idx = erlang:phash2(erlang:statistics(io), length(Servers)) + 1,
             lists:nth(Idx, Servers)
     end.
 

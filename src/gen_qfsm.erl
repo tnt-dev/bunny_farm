@@ -83,7 +83,7 @@ cancel_timer(TimerRef) ->
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% PRIVATE %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
 
 tag() ->
-  In = float_to_list(element(3,now()) + random:uniform()),
+  In = integer_to_list(erlang:phash2({self(), os:timestamp()})),
   base64:encode(In).
 
 bus(CachePid, {id,X}) ->
@@ -126,7 +126,6 @@ init([Module, Args, ConnSpecs]) ->
   {ok, CachePid} = qcache:start_link(),
   Handles = lists:map(fun(Conn) -> connect(Conn) end, ConnSpecs),
   qcache:put_conns(CachePid, Handles),
-  random:seed(now()),
   case Module:init(Args, CachePid) of
     {ok, StateName, StateData} ->
       State = #gen_qstate{module=Module,
