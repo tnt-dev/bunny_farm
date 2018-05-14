@@ -168,11 +168,9 @@ handle_cast({close, ChannelTag}, #state{connection=Connection,
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
-handle_info(reconnect, #state{connection=Connection,
-                              channel=Channel,
-                              consumes=Consumes}=State) ->
+handle_info(reconnect, #state{consumes=Consumes}=State) ->
     case connect(State) of
-        {ok, #state{channel=Channel}=NewState} ->
+        {ok, #state{connection=Connection, channel=Channel}=NewState} ->
             try
                 {ok, #state{queue=Q}=NewState2} = declare(NewState),
                 [subscribe(Q, Options, Pid, Channel)
@@ -418,10 +416,10 @@ resolve_options(queue, MaybeTuple) ->
 
 close_connection(Connection, Channel) ->
     case is_pid(Channel) of
-        true  -> amqp_channel:close(Channel);
+        true  -> catch amqp_channel:close(Channel);
         false -> ok
     end,
     case is_pid(Connection) of
-        true  -> amqp_connection:close(Connection);
+        true  -> catch amqp_connection:close(Connection);
         false -> ok
     end.
