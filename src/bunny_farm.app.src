@@ -6,7 +6,10 @@
   {registered, []},
   {applications, [
                   kernel,
-                  stdlib
+                  stdlib,
+                  amqp_client,
+                  bson,
+                  lager
                  ]},
   {env, []}
  ]}.
